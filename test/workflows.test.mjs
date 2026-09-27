@@ -7,7 +7,7 @@ test('real SQL: permissions, reservations, cancellation, handover, return and re
  const db=new PGlite();
  await db.exec(`create role anon; create role authenticated; create role service_role;
  create table public.members(id text primary key,full_name text,display_name text,role text,membership_status text);
- insert into public.members values ('admin','เจ้าหน้าที่','','admin','active'),('alice','สมาชิกหนึ่ง','','member','active'),('bob','สมาชิกสอง','','member','active'),('blocked','ระงับ','','member','suspended');`);
+ insert into public.members values ('admin','เจ้าหน้าที่','','admin','active'),('alice','สมาชิกหนึ่ง','','member','active'),('bob','สมาชิกสอง','',null,'active'),('blocked','ระงับ','','member','suspended');`);
  await db.exec(await readFile(new URL('../schema.sql',import.meta.url),'utf8'));
  const q=async(sql,p=[])=>(await db.query(sql,p)).rows;
  const item=(await q(`insert into public.gears_items(name,category_id) values ('สว่าน','tools') returning id`))[0].id;

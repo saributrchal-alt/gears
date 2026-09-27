@@ -97,7 +97,7 @@ returns jsonb language plpgsql security definer set search_path='' as $$
 declare v public.gears_loans%rowtype; v_staff boolean; v_next text; v_line public.gears_loan_items%rowtype; v_condition text;
 begin
  perform public.gears_require_actor(p_actor);
- select role='admin' into v_staff from public.members where id::text=p_actor;
+ select coalesce(role='admin',false) into v_staff from public.members where id::text=p_actor;
  select * into v from public.gears_loans where id=p_loan for update;
  if not found or (not v_staff and v.member_id<>p_actor) then raise exception 'ไม่พบรายการ'; end if;
  if p_action in ('approve','reject','handover','accept_return') and not v_staff then raise exception 'เฉพาะเจ้าหน้าที่'; end if;
