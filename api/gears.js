@@ -1,3 +1,4 @@
+import {uploadPhoto} from '../lib/photo-upload.js';
 const enc = encodeURIComponent;
 const text = (v, max = 200) => String(v ?? '').trim().slice(0, max);
 const uuid = v => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v));
@@ -89,6 +90,7 @@ export default async function handler(req,res) {
     if(!user.staff)throw fail('เฉพาะเจ้าหน้าที่วัด',403);
     if(action==='inventory'&&req.method==='GET')return res.json({items:await all('gears_items?select=*,gears_categories(name)&order=name.asc,id.asc'),assets:await all('gears_assets?select=*&order=code.asc')});
     if(req.method!=='POST')throw fail('ไม่พบคำสั่ง',404);
+    if(action==='photo') return res.json(await uploadPhoto(b.image));
     if(action==='category') {
       if(!text(b.name,100))throw fail('กรอกชื่อหมวดหมู่');
       const {randomUUID}=await import('node:crypto');
