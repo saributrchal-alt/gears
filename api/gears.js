@@ -1,3 +1,4 @@
+import {decodeSignature,signatureMedia,uploadSignature,readSignature} from '../lib/signature-media.js';
 import {uploadPhoto} from '../lib/photo-upload.js';
 const enc = encodeURIComponent;
 const text = (v, max = 200) => String(v ?? '').trim().slice(0, max);
@@ -14,7 +15,7 @@ async function db(path, method = 'GET', body) {
     if (value?.code === 'P0001') throw fail(value.message);
     if (value?.code === '23505') throw fail('รายการซ้ำหรืออุปกรณ์ถูกจองแล้ว กรุณาอัปเดต',409);
     console.error('Gears database:', response.status, value?.code);
-    throw fail('ยังอ่านหรือบันทึกทะเบียนไม่ได้ กรุณาตรวจการตั้งค่าและรัน schema.sql',503);
+    throw Object.assign(fail('ยังอ่านหรือบันทึกทะเบียนไม่ได้ กรุณาตรวจการตั้งค่าและรัน schema.sql',503),{code:value?.code});
   }
   return value;
 }
@@ -84,6 +85,23 @@ export default async function handler(req,res) {
       }
       return res.json({loan:{...rows[0],handover_name:handoverName},events:events.map(({actor_id,...event})=>event)});
     }
+    if(action==='signature-ready'&&req.method==='GET') {
+      if(!user.staff)throw fail('เฉพาะเจ้าหน้าที่',403);
+      try{await db('gears_loan_signatures?select=loan_id&limit=0');}catch{throw fail('กรุณารัน migration-20260928-signatures.sql ใน Supabase ก่อน',503);}
+      await signatureMedia('health');return res.json({ready:true});
+    }
+    if(action==='signature-data'&&req.method==='GET') {
+      if(!uuid(req.query.id))throw fail('รหัสรายการไม่ถูกต้อง');
+      const loans=await db(`gears_loans?id=eq.${enc(req.query.id)}${user.staff?'':`&member_id=eq.${enc(user.id)}`}&select=id&limit=1`);
+      if(!loans[0])throw fail('ไม่พบรายการ',404);
+      let records;
+      try{records=await db(`gears_loan_signatures?loan_id=eq.${enc(req.query.id)}&select=borrower_name,staff_name,borrower_url,staff_url,signed_at&limit=1`);}
+      catch(e){if(['42P01','PGRST205'].includes(e.code))return res.json({signatures:null});throw e;}
+      if(!records[0])return res.json({signatures:null});
+      const record=records[0];
+      const [borrower,staff]=await Promise.all([readSignature(record.borrower_url),readSignature(record.staff_url)]);
+      return res.json({signatures:{borrower,staff,borrower_name:record.borrower_name,staff_name:record.staff_name,signed_at:record.signed_at}});
+    }
     if(action==='reserve'&&req.method==='POST') {
       if(b.accepted!==true||b.termsVersion!=='2026-09-27'||!Array.isArray(b.lines)||!b.lines.length||b.lines.length>20||b.lines.some(x=>!uuid(x.itemId)||!Number.isInteger(x.quantity)||x.quantity<1||x.quantity>50))throw fail('ตรวจรายการ จำนวน และยอมรับเงื่อนไขก่อนส่ง');
       if(!/^[+\d\s()-]{8,30}$/.test(text(b.phone,31))||!text(b.purpose,1000)||!/^\d{4}-\d{2}-\d{2}$/.test(b.dueDate))throw fail('กรอกเบอร์โทร วัตถุประสงค์ และกำหนดคืน');
@@ -94,6 +112,17 @@ export default async function handler(req,res) {
       if(!allowed.includes(b.operation))throw fail('ไม่มีสิทธิ์ทำรายการนี้',403);
       if(!uuid(b.loanId))throw fail('รหัสรายการไม่ถูกต้อง');
       if(b.operation==='approve'&&!/^\d{4}-\d{2}-\d{2}$/.test(b.dueDate||''))throw fail('ระบุกำหนดคืน');
+      if(b.signatures!==undefined){
+        if(!user.staff||b.operation!=='handover')throw fail('ลงนามได้เฉพาะเจ้าหน้าที่ขณะส่งมอบ',403);
+        if(b.signatures?.accepted!==true)throw fail('กรุณายืนยันลายเซ็นทั้งสองฝ่าย');
+        const borrower=decodeSignature(b.signatures.borrower),staff=decodeSignature(b.signatures.staff);
+        const loans=await db(`gears_loans?id=eq.${enc(b.loanId)}&select=status&limit=1`);
+        if(loans[0]?.status!=='approved')throw fail('สถานะเปลี่ยนไปแล้ว กรุณาอัปเดต',409);
+        await db('gears_loan_signatures?select=loan_id&limit=0');
+        const borrowerUrl=await uploadSignature(borrower),staffUrl=await uploadSignature(staff);
+        return res.json({loan:await db('rpc/gears_signed_handover','POST',{p_loan:b.loanId,p_actor:String(user.id),p_borrower_url:borrowerUrl,p_staff_url:staffUrl,p_note:text(b.note,1000)})});
+      }
+
       return res.json({loan:await db('rpc/gears_transition','POST',{p_loan:b.loanId,p_actor:String(user.id),p_action:b.operation,p_note:text(b.note,1000),p_due:b.operation==='approve'?b.dueDate:null,p_conditions:b.conditions&&typeof b.conditions==='object'?b.conditions:{}})});
     }
     if(!user.staff)throw fail('เฉพาะเจ้าหน้าที่วัด',403);
