@@ -37,6 +37,7 @@ async function actor(req) {
   return {...member,staff:member.role==='admin'};
 }
 const loanFields='*,gears_loan_items(id,asset_id,item_name,asset_code,returned_at,return_condition)';
+const loanDetailFields='*,gears_loan_items(id,asset_id,item_name,asset_code,returned_at,return_condition,gears_assets(gears_items(image_url)))';
 export default async function handler(req,res) {
   res.setHeader('Cache-Control','no-store');
   res.setHeader('X-Content-Type-Options','nosniff');
@@ -72,7 +73,7 @@ export default async function handler(req,res) {
     }
     if(['loan','history'].includes(action)&&req.method==='GET') {
       if(!uuid(req.query.id))throw fail('รหัสรายการไม่ถูกต้อง');
-      const rows=await db(`gears_loans?id=eq.${enc(req.query.id)}${user.staff?'':`&member_id=eq.${enc(user.id)}`}&select=${loanFields}&limit=1`);
+      const rows=await db(`gears_loans?id=eq.${enc(req.query.id)}${user.staff?'':`&member_id=eq.${enc(user.id)}`}&select=${loanDetailFields}&limit=1`);
       if(!rows[0])throw fail('ไม่พบรายการ',404);
       const events=await db(`gears_events?loan_id=eq.${enc(req.query.id)}&select=action,note,created_at,actor_id&order=created_at.asc,id.asc`);
       const handover=events.find(event=>event.action==='on_loan');
