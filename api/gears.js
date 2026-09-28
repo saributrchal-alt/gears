@@ -73,7 +73,16 @@ export default async function handler(req,res) {
       if(!uuid(req.query.id))throw fail('รหัสรายการไม่ถูกต้อง');
       const rows=await db(`gears_loans?id=eq.${enc(req.query.id)}${user.staff?'':`&member_id=eq.${enc(user.id)}`}&select=${loanFields}&limit=1`);
       if(!rows[0])throw fail('ไม่พบรายการ',404);
-      return res.json({loan:rows[0],events:await db(`gears_events?loan_id=eq.${enc(req.query.id)}&select=action,note,created_at&order=created_at.asc,id.asc`)});
+      const events=await db(`gears_events?loan_id=eq.${enc(req.query.id)}&select=action,note,created_at,actor_id&order=created_at.asc,id.asc`);
+      const handover=events.find(event=>event.action==='on_loan');
+      let handoverName='';
+      if(handover?.actor_id){
+        const staff=await db(`members?id=eq.${enc(handover.actor_id)}&select=full_name,display_name&limit=1`);
+        handoverName=staff[0]?.full_name||staff[0]?.display_name||'';
+      }else if(!rows[0].handed_at&&user.staff){
+        handoverName=user.full_name||user.display_name||'';
+      }
+      return res.json({loan:{...rows[0],handover_name:handoverName},events:events.map(({actor_id,...event})=>event)});
     }
     if(action==='reserve'&&req.method==='POST') {
       if(b.accepted!==true||b.termsVersion!=='2026-09-27'||!Array.isArray(b.lines)||!b.lines.length||b.lines.length>20||b.lines.some(x=>!uuid(x.itemId)||!Number.isInteger(x.quantity)||x.quantity<1||x.quantity>50))throw fail('ตรวจรายการ จำนวน และยอมรับเงื่อนไขก่อนส่ง');
