@@ -87,20 +87,24 @@ export default async function handler(req,res) {
     }
     if(action==='signature-ready'&&req.method==='GET') {
       if(!user.staff)throw fail('เฉพาะเจ้าหน้าที่',403);
-      try{await db('gears_loan_signatures?select=loan_id&limit=0');}catch{throw fail('กรุณารัน migration-20260928-signatures.sql ใน Supabase ก่อน',503);}
+      const returning=req.query.operation==='accept_return';
+      try{await db(`${returning?'gears_return_signatures':'gears_loan_signatures'}?select=loan_id&limit=0`);}catch{throw fail(`กรุณารัน ${returning?'migration-20260928-return-signatures.sql':'migration-20260928-signatures.sql'} ใน Supabase ก่อน`,503);}
       await signatureMedia('health');return res.json({ready:true});
     }
     if(action==='signature-data'&&req.method==='GET') {
       if(!uuid(req.query.id))throw fail('รหัสรายการไม่ถูกต้อง');
       const loans=await db(`gears_loans?id=eq.${enc(req.query.id)}${user.staff?'':`&member_id=eq.${enc(user.id)}`}&select=id&limit=1`);
       if(!loans[0])throw fail('ไม่พบรายการ',404);
-      let records;
-      try{records=await db(`gears_loan_signatures?loan_id=eq.${enc(req.query.id)}&select=borrower_name,staff_name,borrower_url,staff_url,signed_at&limit=1`);}
-      catch(e){if(['42P01','PGRST205'].includes(e.code))return res.json({signatures:null});throw e;}
-      if(!records[0])return res.json({signatures:null});
-      const record=records[0];
-      const [borrower,staff]=await Promise.all([readSignature(record.borrower_url),readSignature(record.staff_url)]);
-      return res.json({signatures:{borrower,staff,borrower_name:record.borrower_name,staff_name:record.staff_name,signed_at:record.signed_at}});
+      async function optionalRecord(table,fields){
+        try{return (await db(`${table}?loan_id=eq.${enc(req.query.id)}&select=${fields}&limit=1`))[0];}
+        catch(e){if(['42P01','PGRST205'].includes(e.code))return null;throw e;}
+      }
+      const record=await optionalRecord('gears_loan_signatures','borrower_name,staff_name,borrower_url,staff_url,signed_at');
+      const returned=await optionalRecord('gears_return_signatures','staff_name,staff_url,signed_at');
+      let signatures=null,returnSignature=null;
+      if(record){const [borrower,staff]=await Promise.all([readSignature(record.borrower_url),readSignature(record.staff_url)]);signatures={borrower,staff,borrower_name:record.borrower_name,staff_name:record.staff_name,signed_at:record.signed_at};}
+      if(returned)returnSignature={staff:await readSignature(returned.staff_url),staff_name:returned.staff_name,signed_at:returned.signed_at};
+      return res.json({signatures,returnSignature});
     }
     if(action==='reserve'&&req.method==='POST') {
       if(b.accepted!==true||b.termsVersion!=='2026-09-27'||!Array.isArray(b.lines)||!b.lines.length||b.lines.length>20||b.lines.some(x=>!uuid(x.itemId)||!Number.isInteger(x.quantity)||x.quantity<1||x.quantity>50))throw fail('ตรวจรายการ จำนวน และยอมรับเงื่อนไขก่อนส่ง');
@@ -112,6 +116,16 @@ export default async function handler(req,res) {
       if(!allowed.includes(b.operation))throw fail('ไม่มีสิทธิ์ทำรายการนี้',403);
       if(!uuid(b.loanId))throw fail('รหัสรายการไม่ถูกต้อง');
       if(b.operation==='approve'&&!/^\d{4}-\d{2}-\d{2}$/.test(b.dueDate||''))throw fail('ระบุกำหนดคืน');
+      if(b.signatures!==undefined&&b.operation==='accept_return'){
+        if(!user.staff)throw fail('เฉพาะเจ้าหน้าที่',403);
+        if(b.signatures?.accepted!==true)throw fail('กรุณายืนยันลายเซ็นผู้ตรวจรับคืน');
+        const staff=decodeSignature(b.signatures.staff);
+        const loans=await db(`gears_loans?id=eq.${enc(b.loanId)}&select=status&limit=1`);
+        if(!['on_loan','return_pending'].includes(loans[0]?.status))throw fail('สถานะเปลี่ยนไปแล้ว กรุณาอัปเดต',409);
+        await db('gears_return_signatures?select=loan_id&limit=0');
+        const staffUrl=await uploadSignature(staff);
+        return res.json({loan:await db('rpc/gears_signed_return','POST',{p_loan:b.loanId,p_actor:String(user.id),p_staff_url:staffUrl,p_conditions:b.conditions&&typeof b.conditions==='object'?b.conditions:{},p_note:text(b.note,1000)})});
+      }
       if(b.signatures!==undefined){
         if(!user.staff||b.operation!=='handover')throw fail('ลงนามได้เฉพาะเจ้าหน้าที่ขณะส่งมอบ',403);
         if(b.signatures?.accepted!==true)throw fail('กรุณายืนยันลายเซ็นทั้งสองฝ่าย');
